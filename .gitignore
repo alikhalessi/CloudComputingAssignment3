@@ -1,0 +1,28 @@
+# Python / venv
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Logs
+*.log
+
+# Large datasets + generated artifacts (DON'T COMMIT)
+images/
+frames.zip
+images_all.txt
+
+# Big/derived models (keep local or on VM)
+model_full.csv
+model_full_*.csv
+run_full.log
+job_full.log
+
+# If you generate other models locally
+model.csv
