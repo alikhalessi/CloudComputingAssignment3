@@ -2,8 +2,10 @@ numpy
 pandas
 pillow
 ollama
+matplotlib
 requests
 fastapi
 uvicorn
 python-multipart
+
 
