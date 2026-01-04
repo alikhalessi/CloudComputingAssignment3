@@ -1,3 +1,6 @@
+cd ~/Documents/Github/CloudComputingAssignment3
+
+cat > .gitignore << 'EOF'
 # Python / venv
 .venv/
 venv/
@@ -13,18 +16,16 @@ Thumbs.db
 # Logs
 *.log
 
-# Large datasets + generated artifacts (DON'T COMMIT)
+# Dataset + temp lists (DON'T COMMIT)
 images/
-frames.zip
-images_all.txt
+images*.txt
 
-# Big/derived models (keep local or on VM)
-model_full.csv
-model_full_*.csv
-run_full.log
-job_full.log
+# Generated outputs / models (DON'T COMMIT)
+out/
+*.csv
+EOF
 
-# If you generate other models locally
-model.csv
-
-images.txt
+git status
+git add .gitignore
+git commit -m "Ignore local datasets and generated outputs"
+git push
