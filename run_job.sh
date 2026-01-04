@@ -1,77 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "=== System Info ==="
+uname -a || true
+echo "=== GPU Check (should show NVIDIA T4 on ACA GPU) ==="
+nvidia-smi || true
+echo "==================="
+
+: "${FRAMES_ZIP_URL:?Set FRAMES_ZIP_URL to a SAS URL for frames.zip (Blob)}"
+: "${OUTPUT_BLOB_URL:?Set OUTPUT_BLOB_URL to a SAS URL for uploading model.csv (Blob)}"
+
+VISION_MODEL="${VISION_MODEL:-llava}"
+EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+
 cd /app
 mkdir -p data/images out
 
-echo "=== A1 Job starting ==="
-echo "Working dir: $(pwd)"
-echo "Python: $(python3 --version || true)"
-echo "Pip: $(python3 -m pip --version || true)"
+echo "Downloading frames.zip from Blob..."
+curl -L --fail --retry 5 --retry-delay 2 "$FRAMES_ZIP_URL" -o /app/frames.zip
 
-# ---- A1: Download frames.zip from Azure Blob via SAS URL ----
-# You must pass FRAMES_URL as an environment variable to the Container Apps Job
-if [ ! -f "/app/frames.zip" ] && [ -n "${FRAMES_URL:-}" ]; then
-  echo "Downloading frames.zip from Blob..."
-  curl -L "$FRAMES_URL" -o /app/frames.zip
-fi
+echo "Extracting frames.zip..."
+rm -rf /tmp/frames && mkdir -p /tmp/frames
+unzip -o /app/frames.zip -d /tmp/frames >/dev/null
 
-# ---- Proof of GPU (if present) ----
-echo "GPU devices check:"
-ls -la /dev/nvidia* 2>/dev/null || echo "No /dev/nvidia* seen"
-nvidia-smi 2>/dev/null || true
+echo "Flattening images into /app/data/images ..."
+find /tmp/frames -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) \
+  -exec cp -f {} /app/data/images/ \;
 
-# ---- Extract frames.zip into data/images (flatten) if images folder empty ----
-if [ -f "/app/frames.zip" ] && [ "$(find /app/data/images -type f 2>/dev/null | wc -l)" -eq 0 ]; then
-  echo "Extracting frames.zip ..."
-  rm -rf /tmp/frames
-  mkdir -p /tmp/frames
-  unzip -o /app/frames.zip -d /tmp/frames >/dev/null
+rm -rf /tmp/frames
 
-  # Copy/flatten all images into /app/data/images
-  find /tmp/frames -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) \
-    -exec cp -f {} /app/data/images/ \;
-
-  rm -rf /tmp/frames
-fi
-
-# ---- Create images.txt (absolute paths) ----
+echo "Building images.txt ..."
 find /app/data/images -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) | sort > /app/images.txt
 echo "Images count: $(wc -l < /app/images.txt)"
 
-# ---- Start Ollama server ----
-echo "Starting ollama serve..."
+echo "Starting Ollama..."
 ollama serve > /tmp/ollama_runtime.log 2>&1 &
 OLLAMA_PID=$!
 sleep 2
 
-# ---- Ensure models exist (pull at runtime) ----
-echo "Ensuring models are present..."
-ollama list | grep -qi "llava" || ollama pull llava
-ollama list | grep -qi "nomic-embed-text" || ollama pull nomic-embed-text
+echo "Ensuring models exist..."
+ollama list | grep -q "$VISION_MODEL" || ollama pull "$VISION_MODEL"
+ollama list | grep -q "$EMBED_MODEL" || ollama pull "$EMBED_MODEL"
 
-# ---- Run pipeline ----
 echo "Running pipeline..."
 python3 pipeline.py \
   --images /app/images.txt \
   --model /app/out/model.csv \
-  --vision_model llava \
-  --embed_model nomic-embed-text
+  --vision_model "$VISION_MODEL" \
+  --embed_model "$EMBED_MODEL"
 
-# ---- Sample queries (shows evidence in logs) ----
-echo "Running sample queries..."
-python3 query.py --model /app/out/model.csv --question "Find images with a cat" --top_k 5 --embed_model nomic-embed-text || true
-python3 query.py --model /app/out/model.csv --question "Find images with a dog" --top_k 5 --embed_model nomic-embed-text || true
+echo "Uploading model.csv to Blob..."
+curl -X PUT --fail --retry 5 --retry-delay 2 \
+  -H "x-ms-blob-type: BlockBlob" \
+  --upload-file /app/out/model.csv \
+  "$OUTPUT_BLOB_URL"
 
-# ---- Upload model.csv back to Blob (so job output persists) ----
-# You must pass RESULTS_URL as an environment variable to the Container Apps Job
-if [ -n "${RESULTS_URL:-}" ] && [ -f "/app/out/model.csv" ]; then
-  echo "Uploading out/model.csv to Blob..."
-  curl -X PUT -T /app/out/model.csv -H "x-ms-blob-type: BlockBlob" "$RESULTS_URL"
-fi
+echo "Sample queries (logs only):"
+python3 query.py --model /app/out/model.csv --question "Find images with a cat" --top_k 5 --embed_model "$EMBED_MODEL" || true
+python3 query.py --model /app/out/model.csv --question "Find images with a dog" --top_k 5 --embed_model "$EMBED_MODEL" || true
 
-echo "DONE. model.csv bytes: $(stat -c%s /app/out/model.csv 2>/dev/null || wc -c < /app/out/model.csv)"
+BYTES="$(wc -c < /app/out/model.csv || true)"
+echo "DONE. model.csv bytes: ${BYTES}"
 
-# ---- Stop ollama ----
-kill $OLLAMA_PID 2>/dev/null || true
-echo "=== A1 Job finished ==="
+kill "$OLLAMA_PID" || true
