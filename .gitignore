@@ -26,3 +26,5 @@ job_full.log
 
 # If you generate other models locally
 model.csv
+
+images.txt
